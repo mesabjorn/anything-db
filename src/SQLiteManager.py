@@ -1,23 +1,14 @@
 import sqlite3
 import time
 import re
-from . import logger
-
-
-def receive_yes_no(question: str) -> bool:
-    yes_values = ["true", "1", "t", "y", "yes"]
-    no_values = ["false", "0", "f", "n", "no"]
-
-    while True:
-        answer = input(question).lower().strip()
-        if answer in yes_values or answer in no_values:
-            break
-        print(f"Unknown answer '{answer}'")
-
-    return answer in yes_values
-
 
 import pandas as pd
+
+from src.Schema import Schema
+
+from . import logger
+from src.utils import receive_yes_no
+
 
 # Mapping SQLite types to pandas types
 sqlite_to_pandas = {
@@ -27,77 +18,6 @@ sqlite_to_pandas = {
     "NUMERIC": "float64",
     "BLOB": "object",
 }
-
-
-class Column:
-    def __init__(self, name: str, _type: str, not_null: bool = False):
-        self.name = name
-        self.type = _type
-        self.not_null = not_null == 1
-        self.primary_key = False
-        self.visible = self.name != "updated" and name != "id"
-
-    def enter(self, isupdate=False):
-        while True:
-            value = input(f"Value for {self.name}: ({self.type})").strip()
-            if isupdate or (len(value) > 0 and self.not_null) or not self.not_null:
-                return value
-
-            logger.warning(
-                f"A value for '{self.name}' is required and cannot be empty."
-            )
-
-    def __str__(self):
-        return (
-            f"<Column {self.name}:{self.type} {'!REQUIRED!' if self.not_null else ''}>"
-        )
-
-
-class Schema:
-    def __init__(self, name: str, columns: list[tuple]):
-        self.name = name
-        self.columns = [Column(name=c[1], _type=c[2], not_null=c[3]) for c in columns]
-
-    def has_changed(self) -> bool:
-        # returns whether or not this table has an update column named 'updated'
-        return len([x.name == "updated" for x in self.columns]) > 0
-
-    def enter_values(self) -> dict[str, str]:
-        updates = {}
-        for c in self.columns:
-            if c.visible:
-                updates[c.name] = c.enter()
-
-        if self.has_changed():
-            updates["updated"] = time.time()
-        return updates
-
-    def re_enter_values(self) -> dict[str, str]:
-        updates = {}
-        for c in self.columns:
-            if c.visible:
-                updates[c.name] = c.enter(isupdate=True)
-
-        if self.has_changed():
-            updates["updated"] = time.time()
-        return updates
-
-    def _get_column(self, name: str):
-        return next((c for c in self.columns if c.name == name), None)
-
-    @property
-    def column(self):
-        return self._get_column
-
-    def __str__(self):
-        print(f"Schema for table '{self.name}':")
-        for column in filter(lambda x: x.visible, self.columns):
-            print(f"\t{column}")
-        return ""
-
-
-class Table:
-    pass
 
 
 class SQLiteManager:
@@ -131,10 +51,12 @@ class SQLiteManager:
                 index = int(table)
                 if index < 0 or index >= n_tables:
                     raise IndexError(
-                        f"No such table index, please specify the name or the index between 0 and {len(self.tables)-1}"
+                        f"No such table index, please specify the name or the index between 0 and {len(self.tables) - 1}"
                     )
                 return self.tables[index]
             except IndexError as e:
+                logger.error(e)
+            except Exception as e:
                 logger.error(e)
 
     def select_condition(self, table_name: str, schema: Schema) -> str:
@@ -312,6 +234,8 @@ class SQLiteManager:
 
 def CLI_manage(db_manager: SQLiteManager):
     while True:
+        print("Press any key to continue..")
+        input('')
         print("-" * 25)
         print("1. List Tables")
         print("2. Create Table")
@@ -321,8 +245,10 @@ def CLI_manage(db_manager: SQLiteManager):
         print("6. Update Record")
         print("7. Delete Record")
         print("8. Exit")
-
+        print("-" * 25)
         choice = input("What do you want to do? ")
+        print("-" * 25)
+
 
         if choice == "1":
             db_manager.list_tables()
@@ -365,3 +291,4 @@ def CLI_manage(db_manager: SQLiteManager):
             break
         else:
             print("Invalid choice. Please try again.")
+        print("-" * 25)
