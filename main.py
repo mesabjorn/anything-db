@@ -1,13 +1,19 @@
 from src.SQLiteManager import SQLiteManager, CLI_manage
 import argparse
 
+from pathlib import Path
+
 
 def main():
     parser = argparse.ArgumentParser(description="SQLite Database Manager")
-    parser.add_argument("name", help="Name of the SQLite database file")
+    parser.add_argument(
+        "dbpath",
+        help="Path to the SQLite database file (created if does not yet exist)",
+        type=Path,
+    )
     args = parser.parse_args()
 
-    db_manager = SQLiteManager(args.name)
+    db_manager = SQLiteManager(args.dbpath)
 
     CLI_manage(db_manager)
 

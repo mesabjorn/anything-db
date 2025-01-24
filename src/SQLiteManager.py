@@ -17,6 +17,18 @@ def receive_yes_no(question: str) -> bool:
     return answer in yes_values
 
 
+import pandas as pd
+
+# Mapping SQLite types to pandas types
+sqlite_to_pandas = {
+    "INTEGER": "int64",
+    "TEXT": "object",
+    "REAL": "float64",
+    "NUMERIC": "float64",
+    "BLOB": "object",
+}
+
+
 class Column:
     def __init__(self, name: str, _type: str, not_null: bool = False):
         self.name = name
@@ -70,6 +82,13 @@ class Schema:
             updates["updated"] = time.time()
         return updates
 
+    def _get_column(self, name: str):
+        return next((c for c in self.columns if c.name == name), None)
+
+    @property
+    def column(self):
+        return self._get_column
+
     def __str__(self):
         print(f"Schema for table '{self.name}':")
         for column in filter(lambda x: x.visible, self.columns):
@@ -103,10 +122,61 @@ class SQLiteManager:
 
     def select_table(self, prompt: str):
         # helper function for making sure proper table gets selected
-        table = input(prompt)
-        if table.isnumeric():
-            return self.tables[int(table)]
-        return table
+        while True:
+            table = input(prompt)
+            n_tables = len(self.tables)
+            if table in self.tables:
+                return table
+            try:
+                index = int(table)
+                if index < 0 or index >= n_tables:
+                    raise IndexError(
+                        f"No such table index, please specify the name or the index between 0 and {len(self.tables)-1}"
+                    )
+                return self.tables[index]
+            except IndexError as e:
+                logger.error(e)
+
+    def select_condition(self, table_name: str, schema: Schema) -> str:
+        """function to select a condition interactively from a table"""
+        while True:
+            a = input(
+                'How would you like to select ("direct", "list","search","cancel")'
+            )
+            if a in ["direct", "list", "search", "cancel"]:
+                break
+            logger.warning(f"Unknown option: '{a}'. Please select a valid option.")
+
+        if a == "list":
+            self.read(table_name)
+
+        if a == "search":
+            while True:
+                q = input("Query: (format column=contents):")
+                if len(q) == 0:
+                    break
+                try:
+                    column_name, value = [i.strip() for i in q.split("=")]
+                    column = schema.column(column_name)
+                    if not column:
+                        raise Exception(
+                            f"Column '{column_name}' not found in schema of '{table_name}'"
+                        )
+                    query = (
+                        f"SELECT * FROM {table_name} "
+                        f"WHERE {column.name} "
+                        f"{'LIKE' if column.type == 'TEXT' else '='} "
+                        f"{'?' if column.type == 'TEXT' else '?'} "
+                        f"{'COLLATE NOCASE' if column.type == 'TEXT' else ''};"
+                    )
+                    params = (f"%{value}%" if column.type == "TEXT" else value,)
+                    self.query(query, params)
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Invalid input: {e}")
+                except Exception as e:
+                    logger.warning(f"Invalid input: {e}")
+
+        return input("Enter condition (e.g., id=1): ")
 
     def get_table_schema(self, table_name: str) -> Schema:
         "fetches schema from table in the form (index,name,type,not_null,default,auto_increment)"
@@ -185,12 +255,28 @@ class SQLiteManager:
         except sqlite3.IntegrityError as e:
             logger.error(f"Invalid entry: '{e}'")
 
-    def read(self, table_name):
+    def read(self, table_name: str, n: int = 10) -> pd.DataFrame:
+        "read all rows"
         select_query = f"SELECT * FROM {table_name};"
-        self.cursor.execute(select_query)
-        rows = self.cursor.fetchall()
-        for row in rows:
-            print(row)
+        schema = self.get_table_schema(table_name)
+        data = self.query(select_query)
+
+        # Dictionary comprehension for columns mapped to pandas types
+        dtypes = {
+            column.name: sqlite_to_pandas.get(column.type.upper(), "object")
+            for column in schema.columns
+        }
+        df = pd.DataFrame(data, columns=[c.name for c in schema.columns])
+        df = df.astype(dtypes)
+        print(df.iloc[:n])
+        return df
+
+    def query(self, query: str, params: str = ""):
+        self.cursor.execute(query, params)
+        return self.cursor.fetchall()
+
+        # for row in rows:
+        #     print(row)
 
     def update(self, table_name, condition, updates: dict[str, str]):
         self.get_table_schema(table_name)
@@ -224,7 +310,7 @@ class SQLiteManager:
         self.connection.close()
 
 
-def CLI_manage(db_manager):
+def CLI_manage(db_manager: SQLiteManager):
     while True:
         print("-" * 25)
         print("1. List Tables")
@@ -240,36 +326,39 @@ def CLI_manage(db_manager):
 
         if choice == "1":
             db_manager.list_tables()
-        elif choice == "2":
+        elif choice == "2":  # create table
             table_name = db_manager.select_table("Enter table name: ")
             db_manager.create_table(table_name)
-        elif choice == "3":
+        elif choice == "3":  # drop table
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name to drop: ")
             db_manager.drop_table(table_name)
-        elif choice == "4":
+        elif choice == "4":  # insert record into table
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name: ")
             schema = db_manager.get_table_schema(table_name)
             updates = schema.enter_values()
             db_manager.insert(table_name, updates)
-        elif choice == "5":
+        elif choice == "5":  # read records into table
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name: ")
-            db_manager.read(table_name)
-        elif choice == "6":
+            if table_name:
+                db_manager.read(table_name)
+        elif choice == "6":  # update record in table
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name: ")
             schema = db_manager.get_table_schema(table_name)
-
-            condition = input("Enter condition (e.g., id=1): ")
-            updates = schema.re_enter_values()
-            db_manager.update(table_name, condition, updates)
+            condition = db_manager.select_condition(table_name, schema)
+            if condition:
+                updates = schema.re_enter_values()
+                db_manager.update(table_name, condition, updates)
         elif choice == "7":
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name: ")
-            condition = input("Enter condition (e.g., id=1): ")
-            db_manager.delete(table_name, condition)
+            schema = db_manager.get_table_schema(table_name)
+            condition = db_manager.select_condition(table_name, schema)
+            if condition:
+                db_manager.delete(table_name, condition)
         elif choice == "8":
             db_manager.close()
             print("Exiting program.")
