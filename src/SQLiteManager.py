@@ -40,6 +40,10 @@ class SQLiteManager:
         self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         return [x[0] for x in self.cursor.fetchall()]
 
+    def enter_new_table_name(self, prompt: str):
+        table = input(prompt)
+        return table
+
     def select_table(self, prompt: str):
         # helper function for making sure proper table gets selected
         while True:
@@ -73,8 +77,9 @@ class SQLiteManager:
             self.read(table_name)
 
         if a == "search":
-            while True:
-                q = input("Query: (format column=contents):")
+            r = []
+            while len(r) == 0:
+                q = input("Query: (format column=contents; e.g 'reeks=\"Asterix\"'):")
                 if len(q) == 0:
                     break
                 try:
@@ -92,7 +97,11 @@ class SQLiteManager:
                         f"{'COLLATE NOCASE' if column.type == 'TEXT' else ''};"
                     )
                     params = (f"%{value}%" if column.type == "TEXT" else value,)
-                    self.query(query, params)
+                    r = self.query(query, params)
+                    df = self._as_dataframe(r, schema)
+                    if not df.empty:
+                        print(df)
+
                 except sqlite3.OperationalError as e:
                     logger.warning(f"Invalid input: {e}")
                 except Exception as e:
@@ -184,13 +193,18 @@ class SQLiteManager:
         data = self.query(select_query)
 
         # Dictionary comprehension for columns mapped to pandas types
+        df = self._as_dataframe(data, schema)
+        print(df.iloc[:n])
+        return
+
+    def _as_dataframe(self, data, schema):
         dtypes = {
             column.name: sqlite_to_pandas.get(column.type.upper(), "object")
             for column in schema.columns
         }
         df = pd.DataFrame(data, columns=[c.name for c in schema.columns])
         df = df.astype(dtypes)
-        print(df.iloc[:n])
+
         return df
 
     def query(self, query: str, params: str = ""):
@@ -201,7 +215,7 @@ class SQLiteManager:
         #     print(row)
 
     def update(self, table_name, condition, updates: dict[str, str]):
-        self.get_table_schema(table_name)
+        schema = self.get_table_schema(table_name)
         updates = {k: v for k, v in updates.items() if v}
 
         updates_str = ", ".join([f"{key} = ?" for key in updates.keys()])
@@ -235,7 +249,7 @@ class SQLiteManager:
 def CLI_manage(db_manager: SQLiteManager):
     while True:
         print("Press any key to continue..")
-        input('')
+        input("")
         print("-" * 25)
         print("1. List Tables")
         print("2. Create Table")
@@ -249,11 +263,10 @@ def CLI_manage(db_manager: SQLiteManager):
         choice = input("What do you want to do? ")
         print("-" * 25)
 
-
         if choice == "1":
             db_manager.list_tables()
         elif choice == "2":  # create table
-            table_name = db_manager.select_table("Enter table name: ")
+            table_name = db_manager.enter_new_table_name("Enter table name to create: ")
             db_manager.create_table(table_name)
         elif choice == "3":  # drop table
             db_manager.list_tables()
@@ -265,7 +278,7 @@ def CLI_manage(db_manager: SQLiteManager):
             schema = db_manager.get_table_schema(table_name)
             updates = schema.enter_values()
             db_manager.insert(table_name, updates)
-        elif choice == "5":  # read records into table
+        elif choice == "5":  # read records from table
             db_manager.list_tables()
             table_name = db_manager.select_table("Enter table name: ")
             if table_name:
